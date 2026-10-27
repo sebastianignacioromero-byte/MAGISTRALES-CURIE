@@ -1,0 +1,3 @@
+# Zoho Mail no envía el JWT de Supabase: la función se protege con ?token=<CONFIRMACION_TOKEN>.
+[functions.confirmar-elaboracion]
+verify_jwt = false
