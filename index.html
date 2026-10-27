@@ -562,6 +562,7 @@ var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 var state = {
   pacientes: [],
   recetas: [],
+  confirmacionesPendientes: [],
   view: "dashboard",
   search: "",
   filterEstado: "",
@@ -676,6 +677,9 @@ window.addEventListener("dragover", function(e){ e.preventDefault(); });
 window.addEventListener("drop", function(e){ e.preventDefault(); });
 
 /* ---------------- mapeo entre el estado de la app (camelCase) y las filas de Supabase (snake_case) ---------------- */
+/* elaboracion_confirmada_at no se envía aquí a propósito: la escribe la función
+   confirmar-elaboracion (correo del recetario) o setElaboracionConfirmada(), y así un
+   guardado de otra pestaña con datos viejos no la borra. */
 function recetaToRow(r){
   return {
     id: r.id,
@@ -720,6 +724,7 @@ function rowToReceta(row){
     foto: row.foto || null,
     fotoTipo: row.foto_tipo || null,
     mes: row.mes || "",
+    elaboracionConfirmadaAt: row.elaboracion_confirmada_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -807,7 +812,52 @@ function loadAllData(){
     if(recRes.error){ console.error(recRes.error); toast("No se pudieron cargar las recetas: " + recRes.error.message, true); }
     state.pacientes = sortPacientesArr((pacRes.data||[]).map(rowToPaciente));
     state.recetas = sortRecetasArr((recRes.data||[]).map(rowToReceta));
+  }).then(loadConfirmacionesPendientes);
+}
+
+/* ---------------- confirmaciones de elaboración (correo del recetario) ---------------- */
+/* Avisos del correo "acuso recibo para su elaboración" que la función confirmar-elaboracion
+   no pudo asociar a una sola receta en Pagado; se muestran en la vista Pagado. */
+function loadConfirmacionesPendientes(){
+  return sb.from("confirmaciones_elaboracion")
+    .select("id, recibido_at, asunto, paciente_extraido, resultado")
+    .eq("revisada", false)
+    .order("recibido_at", {ascending: false})
+    .limit(50)
+    .then(function(res){
+      // si la tabla aún no existe (falta correr la migración) no se interrumpe la app
+      if(res.error){ console.warn("confirmaciones_elaboracion:", res.error.message); return; }
+      state.confirmacionesPendientes = res.data || [];
+    });
+}
+function handleConfirmacionChange(){
+  loadConfirmacionesPendientes().then(render);
+}
+function descartarConfirmacion(id){
+  state.confirmacionesPendientes = state.confirmacionesPendientes.filter(function(c){ return c.id !== id; });
+  render();
+  sb.from("confirmaciones_elaboracion").update({revisada: true}).eq("id", id).then(function(res){
+    if(res.error){ console.error(res.error); toast("No se pudo guardar: " + res.error.message, true); }
   });
+}
+function setElaboracionConfirmada(id, confirmada){
+  var idx = state.recetas.findIndex(function(x){ return x.id===id; });
+  if(idx<0) return;
+  var ahora = new Date().toISOString();
+  var valor = confirmada ? ahora : null;
+  state.recetas[idx] = Object.assign({}, state.recetas[idx], {elaboracionConfirmadaAt: valor, updatedAt: ahora});
+  render();
+  sb.from("recetas").update({elaboracion_confirmada_at: valor, updated_at: ahora}).eq("id", id).then(function(res){
+    if(res.error){ console.error(res.error); toast("No se pudo guardar en el servidor: " + res.error.message, true); return; }
+    toast(confirmada ? "Elaboración marcada como confirmada" : "Confirmación de elaboración quitada");
+  });
+}
+function fmtFechaHora(iso){
+  if(!iso) return "—";
+  var d = new Date(iso);
+  if(isNaN(d.getTime())) return "—";
+  return String(d.getDate()).padStart(2,"0")+"/"+String(d.getMonth()+1).padStart(2,"0")+" "+
+    String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
 }
 
 /* ---------------- tiempo real: refleja cambios hechos por otros usuarios ---------------- */
@@ -839,6 +889,7 @@ function subscribeRealtime(){
   realtimeChannel = sb.channel("recetario-live")
     .on("postgres_changes", {event:"*", schema:"public", table:"recetas"}, handleRecetaChange)
     .on("postgres_changes", {event:"*", schema:"public", table:"pacientes"}, handlePacienteChange)
+    .on("postgres_changes", {event:"*", schema:"public", table:"confirmaciones_elaboracion"}, handleConfirmacionChange)
     .subscribe();
 }
 function teardownRealtime(){
@@ -1127,8 +1178,8 @@ function renderEstadoView(estado){
     editHint = 'Puedes editar el <strong>paciente</strong>, <strong>tutor</strong>, <strong>teléfono</strong>, <strong>C.S.P.</strong>, <strong>monto</strong>, <strong>costo</strong>, <strong>recetario</strong> y <strong>medio de pago</strong> directamente en la tabla. Las filas resaltadas ya tienen monto y costo cotizados (el paciente ya fue avisado); las filas sin resaltar aún esperan respuesta del laboratorio. Para mover la receta a <strong>Pagado</strong> usa el <strong>estado</strong> (▾), como siempre.';
   } else if(estado === "PAGADO"){
     editFields = {pacienteNombre:true, tutor:true, telefono:true, monto:true, costo:true, recetarioEditable:true,
-      medioPago:true, hidePrincipios:true};
-    editHint = 'Puedes editar el <strong>paciente</strong>, <strong>tutor</strong>, <strong>teléfono</strong>, <strong>monto</strong>, <strong>costo</strong>, <strong>recetario</strong> y <strong>medio de pago</strong> directamente en la tabla.';
+      medioPago:true, hidePrincipios:true, elaboracion:true};
+    editHint = 'Puedes editar el <strong>paciente</strong>, <strong>tutor</strong>, <strong>teléfono</strong>, <strong>monto</strong>, <strong>costo</strong>, <strong>recetario</strong> y <strong>medio de pago</strong> directamente en la tabla. La columna <strong>Elaboración</strong> se marca sola (✅) cuando el recetario responde el correo con "acuso recibo para su elaboración"; también puedes marcarla o quitarla a mano.';
   } else if(estado === "NOTIFICADO" || estado === "RETIRADO"){
     editFields = {pacienteNombre:true, tutor:true, telefono:true, monto:true, costo:true, recetarioEditable:true,
       principiosActivos:true};
@@ -1150,11 +1201,27 @@ function renderEstadoView(estado){
   if(editFields){
     html += '<div class="field-hint" style="padding:0 18px 10px;">'+editHint+'</div>';
   }
+  if(estado === "PAGADO" && state.confirmacionesPendientes.length){
+    html += '<div style="padding:0 18px;">' + bannerConfirmacionesPendientes() + '</div>';
+  }
   html += '<div class="panel-body">' + recetasTable(list, true, editFields) + '</div>';
   html += '</div>';
 
   $("content").innerHTML = html;
   bindRecetaRows();
+}
+
+function bannerConfirmacionesPendientes(){
+  var motivo = {SIN_COINCIDENCIA:"no hay una receta en Pagado con ese nombre", VARIAS_COINCIDENCIAS:"hay más de una receta en Pagado con ese nombre"};
+  var html = '<div class="banner">✉ Confirmaciones de elaboración del recetario que no se pudieron marcar solas — márcalas a mano en la receta que corresponda:';
+  html += '<ul style="margin:6px 0 0 18px;padding:0;">';
+  state.confirmacionesPendientes.forEach(function(c){
+    html += '<li style="margin:3px 0;"><strong>'+esc(c.paciente_extraido||c.asunto||"(sin asunto)")+'</strong> · '+fmtFechaHora(c.recibido_at)+
+      ' · '+esc(motivo[c.resultado]||c.resultado)+
+      ' <button class="btn btn-secondary btn-sm" style="margin-left:6px;padding:2px 8px;" onclick="RM.descartarConfirmacion('+Number(c.id)+')">Ya lo revisé</button></li>';
+  });
+  html += '</ul></div>';
+  return html;
 }
 
 /* ---------------- recetas: todas / historial completo, con filtros por estado y mes ---------------- */
@@ -1313,6 +1380,7 @@ function recetasTable(list, showPaciente, editFields){
   if(editFields.costo) html += '<th>Costo</th>';
   if(!editFields.hideRecetario) html += '<th>Recetario</th>';
   if(editFields.medioPago) html += '<th>Medio de pago</th>';
+  if(editFields.elaboracion) html += '<th>Elaboración</th>';
   html += '</tr></thead><tbody>';
   list.forEach(function(r){
     var rowCompleto = editFields.highlightCompleto && esCotizadoCompleto(r);
@@ -1389,6 +1457,14 @@ function recetasTable(list, showPaciente, editFields){
         }).join("") +
         '</select></td>';
     }
+    if(editFields.elaboracion){
+      if(r.elaboracionConfirmadaAt){
+        html += '<td><span class="badge badge-pagado" title="Confirmada por el recetario">✅ '+fmtFechaHora(r.elaboracionConfirmadaAt)+'</span> ' +
+          '<button class="btn btn-secondary btn-sm btn-elab" data-id="'+r.id+'" data-confirmar="0" title="Quitar confirmación" style="padding:2px 7px;">✕</button></td>';
+      } else {
+        html += '<td><button class="btn btn-secondary btn-sm btn-elab" data-id="'+r.id+'" data-confirmar="1" title="Marcar a mano como confirmada">Pendiente · marcar</button></td>';
+      }
+    }
     html += '</tr>';
   });
   html += '</tbody></table></div>';
@@ -1445,6 +1521,7 @@ function bindRecetaRows(){
       if(e.target.closest(".estado-pick")) return;
       if(e.target.closest(".cell-edit")) return;
       if(e.target.closest(".btn-copy")) return;
+      if(e.target.closest(".btn-elab")) return;
       openRecetaModal(tr.getAttribute("data-id"));
     });
     tr.addEventListener("dragover", function(e){ e.preventDefault(); e.stopPropagation(); tr.classList.add("drag-over"); });
@@ -1458,6 +1535,12 @@ function bindRecetaRows(){
   });
   document.querySelectorAll(".btn-copy").forEach(function(btn){
     btn.addEventListener("click", function(e){ e.stopPropagation(); copiarTelefonoReceta(btn); });
+  });
+  document.querySelectorAll(".btn-elab").forEach(function(btn){
+    btn.addEventListener("click", function(e){
+      e.stopPropagation();
+      setElaboracionConfirmada(btn.getAttribute("data-id"), btn.getAttribute("data-confirmar")==="1");
+    });
   });
   document.querySelectorAll(".estado-pick").forEach(function(el){
     el.addEventListener("click", function(e){
@@ -1923,6 +2006,7 @@ window.RM = {
   openRecetaModal: openRecetaModal,
   openDescargaModal: openDescargaModal,
   addRecetaInline: addRecetaInline,
+  descartarConfirmacion: descartarConfirmacion,
   __debug: {
     state: state, render: render, sb: sb, boot: boot, startApp: startApp,
     saveRecetaRow: saveRecetaRow, savePacienteRow: savePacienteRow, deleteRecetaRow: deleteRecetaRow,
