@@ -3,6 +3,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buscarReceta,
+  CRITERIO_COTIZACION,
+  leerPrecios,
+  textoPropio,
   campo,
   compararSeguro,
   esConfirmacion,
@@ -98,4 +101,52 @@ test("compara token", () => {
   assert.ok(compararSeguro("abc", "abc"));
   assert.ok(!compararSeguro("abc", "abd"));
   assert.ok(!compararSeguro("", ""));
+});
+
+const COTIZACION_HTML = `<div>Buenas tardes estimados, adjunto cotización solicitada, valor por polybase 20 grs:</div>
+<table border="1"><tbody>
+<tr><td>Precio Lista c/IVA</td><td>16090</td></tr>
+<tr><td>Descuento convenio</td><td>40%</td></tr>
+<tr><td>Precio Final c/IVA</td><td>9654</td></tr>
+<tr><td>Precio Final s/IVA</td><td>8113</td></tr>
+</tbody></table><div>Saludos cordiales.</div>`;
+
+test("lee los precios de la tabla del recetario", () => {
+  assert.deepEqual(leerPrecios(COTIZACION_HTML), { monto: 16090, costo: 8113 });
+});
+
+test("lee precios en texto plano y con puntos de miles", () => {
+  const t = "Precio Lista c/IVA: $16.090\nDescuento convenio 40%\nPrecio Final c/IVA $9.654\nPrecio Final s/IVA $8.113";
+  assert.deepEqual(leerPrecios(t), { monto: 16090, costo: 8113 });
+});
+
+test("no inventa precios si falta alguno o hay dos tablas", () => {
+  assert.equal(leerPrecios("Precio Lista c/IVA 16090"), null);
+  assert.equal(leerPrecios(COTIZACION_HTML + COTIZACION_HTML), null);
+  assert.equal(leerPrecios(""), null);
+});
+
+test("ignora el mensaje citado más abajo", () => {
+  const acuse = "Buenos días estimados, acuso recibo para su elaboración.<br>Saludos cordiales.<br><br>" +
+    "-------------- Mensaje original --------------<br>De: Sebastian Romero<br>confirmo elaboración<br>" + COTIZACION_HTML;
+  assert.equal(leerPrecios(acuse), null);
+  assert.ok(textoPropio(acuse).includes("acuso recibo"));
+  const respuestaMia = "confirmo elaboración<br>De: Recetario Magistral<br>" + COTIZACION_HTML;
+  assert.equal(leerPrecios(respuestaMia), null);
+  assert.ok(!esConfirmacion("Adjunto cotización<br>-------- Mensaje original --------<br>acuso recibo para su elaboración"));
+});
+
+test("cotización: llena la única receta en Cotizado sin precios", () => {
+  const r = buscarReceta([
+    receta({ id: "a", estado: "COTIZADO", paciente_nombre: "Carolina Martínez", monto: 0, costo: 0 }),
+    receta({ id: "b", estado: "PAGADO", paciente_nombre: "Carolina Martínez" }),
+  ], "CAROLINA MARTINEZ", "Salcobrand", CRITERIO_COTIZACION);
+  assert.equal(r.tipo === "MARCADA" && r.receta.id, "a");
+});
+
+test("cotización: no pisa precios ya escritos", () => {
+  const r = buscarReceta([
+    receta({ estado: "COTIZADO", paciente_nombre: "Carolina Martinez", monto: 15000, costo: 0 }),
+  ], "CAROLINA MARTINEZ", "Salcobrand", CRITERIO_COTIZACION);
+  assert.equal(r.tipo, "YA_MARCADA");
 });

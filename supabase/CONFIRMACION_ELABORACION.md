@@ -1,7 +1,14 @@
-# Confirmación automática de elaboración (correo del recetario → plataforma)
+# Correos del recetario → plataforma (precios y confirmación de elaboración)
 
-Cuando el recetario responde el correo de cotización con **"acuso recibo para su elaboración"**,
-la receta queda marcada con ✅ en la columna **Elaboración** de la vista **Pagado**.
+Dos automatizaciones con la misma función de Supabase (`confirmar-elaboracion`):
+
+| Correo del recetario | Qué hace en la plataforma |
+|---|---|
+| Tabla de precios ("adjunto cotización solicitada…") | Receta en **Cotizado** sin precios: **monto** = Precio Lista c/IVA, **costo** = Precio Final s/IVA |
+| "acuso recibo para su elaboración" | Receta en **Pagado**: ✅ en la columna **Elaboración** |
+
+En Cotizado la fila se resalta solo cuando tú escribes el **C.S.P.** (paciente avisado), no por
+tener precios.
 
 ```
 Zoho Mail (regla) ──aviso──▶ Supabase "confirmar-elaboracion" ──▶ marca la receta
@@ -12,12 +19,13 @@ Zoho Mail (regla) ──aviso──▶ Supabase "confirmar-elaboracion" ──�
 Necesitas entrar a <https://supabase.com/dashboard> con la cuenta dueña del proyecto de la
 plataforma (`ufcjxcwwosmznjgjealo`).
 
-### Paso 1 — Agregar la columna nueva (2 min)
+### Paso 1 — Preparar la base de datos (2 min)
 
 1. En el menú izquierdo de Supabase: **SQL Editor** → **New query**.
 2. Abre [`supabase/migrations/20261027000000_elaboracion_confirmada.sql`](migrations/20261027000000_elaboracion_confirmada.sql),
    copia **todo** el texto y pégalo.
 3. Botón **Run**. Debe decir *Success. No rows returned*.
+4. Repite con [`supabase/migrations/20261027120000_cotizacion_desde_correo.sql`](migrations/20261027120000_cotizacion_desde_correo.sql).
 
 ### Paso 2 — Crear la clave secreta (1 min)
 
@@ -37,6 +45,8 @@ Es una contraseña que solo conocerán Supabase y Zoho, para que nadie más pued
    [`supabase/functions/confirmar-elaboracion/index.ts`](functions/confirmar-elaboracion/index.ts),
    botón **Raw**, copia **todo** y pégalo en el editor.
 4. **Deploy function**.
+   *(Si la función ya existe y hay una versión nueva del archivo: entra a la función → **Code**,
+   reemplaza todo por el archivo nuevo y **Deploy** otra vez. La URL y la clave no cambian.)*
 5. Ya creada, entra a la función → **Details** (o **Settings**) → desactiva
    **Enforce JWT verification** (Verify JWT) → **Save**.
    *(Zoho no sabe enviar la llave de Supabase; por eso la protege la clave del paso 2.)*
@@ -65,6 +75,19 @@ En Zoho Mail: ⚙ **Configuración** → **Developer Space** (o **Integraciones*
 > Si no encuentras "Outgoing Webhooks" (depende del plan de Zoho), se hace igual en **Zoho Flow**:
 > disparador *Zoho Mail → New email* con esas condiciones → acción *Webhook (POST)* a la misma
 > dirección, enviando `subject`, `fromAddress` y `summary`.
+
+### Paso 4b — Segundo aviso en Zoho Mail, para los precios
+
+Igual que el paso 4, pero:
+
+- URL: la misma dirección **agregando `&tipo=cotizacion` al final**:
+  `https://ufcjxcwwosmznjgjealo.supabase.co/functions/v1/confirmar-elaboracion?token=TU_CLAVE&tipo=cotizacion`
+- Condiciones (todas):
+  - **Asunto** contiene `COTIZACION RECETA`
+  - **Contenido** contiene `Precio Final`
+
+Si hay más de un producto en el mismo correo (varias tablas), no llena nada y lo deja avisado en
+Cotizado para escribirlo a mano. Nunca pisa un monto o costo que ya escribiste.
 
 ### Paso 5 — Probar con un correo real
 
