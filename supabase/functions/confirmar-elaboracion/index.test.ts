@@ -1,4 +1,4 @@
-// Ejecutar: node --experimental-strip-types --test supabase/functions/confirmar-elaboracion/
+// Ejecutar: node --experimental-strip-types --test supabase/functions/confirmar-elaboracion/index.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -9,7 +9,7 @@ import {
   extraerPaciente,
   recetarioDesdeRemitente,
   type RecetaCandidata,
-} from "./logica.ts";
+} from "./index.ts";
 
 const ASUNTO = 'RE: COTIZACION RECETA "JAVIERA CUETO" (CONVENIO 180002538) FARMACIA CURIE';
 
