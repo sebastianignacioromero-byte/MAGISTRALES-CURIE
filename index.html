@@ -202,8 +202,8 @@
   .chip-clear{font-size:12px;color:var(--turquesa);cursor:pointer;font-weight:600;}
 
   table.tbl tbody tr.drag-over{background:var(--turquesa-suave);outline:2px dashed var(--turquesa-med);outline-offset:-2px;}
-  /* Cotizado: resalta las filas ya cotizadas (monto y costo completos, paciente avisado,
-     a la espera de pago) para diferenciarlas de las que aún esperan respuesta del laboratorio. */
+  /* Cotizado: resalta las filas en que ya se avisó al paciente (C.S.P. escrito a mano), a la
+     espera de pago, para diferenciarlas de las que aún no se le avisan. */
   table.tbl tbody tr.row-completo{background:var(--turquesa-suave2);}
   table.tbl tbody tr.row-completo td{border-bottom-color:#c7e2de;}
 
@@ -620,10 +620,11 @@ function todayISO(){
 }
 function currentMes(){ return todayISO().slice(0,7); }
 /* Una receta "Cotizado" se considera completa (ya se le avisó el valor al paciente y
-   queda a la espera de pago) cuando tiene monto Y costo cargados; mientras falte alguno
-   de los dos, sigue esperando respuesta del laboratorio. */
+   queda a la espera de pago) cuando se escribió el C.S.P., que siempre se llena a mano.
+   No basta con monto y costo: esos los puede llenar solos el correo de cotización del
+   recetario (función confirmar-elaboracion) antes de avisarle al paciente. */
 function esCotizadoCompleto(r){
-  return Number(r.monto)>0 && Number(r.costo)>0;
+  return String(r.csp||"").trim() !== "";
 }
 function diasDesde(iso){
   if(!iso) return 0;
@@ -816,11 +817,12 @@ function loadAllData(){
 }
 
 /* ---------------- confirmaciones de elaboración (correo del recetario) ---------------- */
-/* Avisos del correo "acuso recibo para su elaboración" que la función confirmar-elaboracion
-   no pudo asociar a una sola receta en Pagado; se muestran en la vista Pagado. */
+/* Avisos de correos del recetario que la función confirmar-elaboracion no pudo asociar a una
+   sola receta: los de cotización (precios) se muestran en Cotizado y los de "acuso recibo
+   para su elaboración" en Pagado. */
 function loadConfirmacionesPendientes(){
   return sb.from("confirmaciones_elaboracion")
-    .select("id, recibido_at, asunto, paciente_extraido, resultado")
+    .select("*") // "*" y no columnas sueltas: "tipo" no existe hasta correr la 2ª migración
     .eq("revisada", false)
     .order("recibido_at", {ascending: false})
     .limit(50)
@@ -1154,7 +1156,7 @@ function renderEstadoView(estado){
   });
   list = list.slice().sort(function(a,b){
     if(estado === "COTIZADO"){
-      // sin cotizar aún (esperando respuesta del laboratorio) arriba; ya cotizadas (monto y costo
+      // sin avisar aún al paciente arriba; ya avisadas (C.S.P. escrito
       // completos, paciente ya avisado, a la espera de pago) abajo.
       var completoA = esCotizadoCompleto(a) ? 1 : 0;
       var completoB = esCotizadoCompleto(b) ? 1 : 0;
@@ -1175,7 +1177,7 @@ function renderEstadoView(estado){
   if(estado === "COTIZADO"){
     editFields = {pacienteNombre:true, tutor:true, telefono:true, csp:true, monto:true, costo:true, recetarioEditable:true,
       medioPago:true, highlightCompleto:true, hidePrincipios:true, hideFecha:true};
-    editHint = 'Puedes editar el <strong>paciente</strong>, <strong>tutor</strong>, <strong>teléfono</strong>, <strong>C.S.P.</strong>, <strong>monto</strong>, <strong>costo</strong>, <strong>recetario</strong> y <strong>medio de pago</strong> directamente en la tabla. Las filas resaltadas ya tienen monto y costo cotizados (el paciente ya fue avisado); las filas sin resaltar aún esperan respuesta del laboratorio. Para mover la receta a <strong>Pagado</strong> usa el <strong>estado</strong> (▾), como siempre.';
+    editHint = 'Puedes editar el <strong>paciente</strong>, <strong>tutor</strong>, <strong>teléfono</strong>, <strong>C.S.P.</strong>, <strong>monto</strong>, <strong>costo</strong>, <strong>recetario</strong> y <strong>medio de pago</strong> directamente en la tabla. El <strong>monto</strong> (Precio Lista c/IVA) y el <strong>costo</strong> (Precio Final s/IVA) se llenan solos cuando llega el correo de cotización del recetario. Las filas se resaltan cuando escribes el <strong>C.S.P.</strong> (paciente ya avisado); las sin resaltar aún no se le avisan. Para mover la receta a <strong>Pagado</strong> usa el <strong>estado</strong> (▾), como siempre.';
   } else if(estado === "PAGADO"){
     editFields = {pacienteNombre:true, tutor:true, telefono:true, monto:true, costo:true, recetarioEditable:true,
       medioPago:true, hidePrincipios:true, elaboracion:true};
@@ -1201,8 +1203,8 @@ function renderEstadoView(estado){
   if(editFields){
     html += '<div class="field-hint" style="padding:0 18px 10px;">'+editHint+'</div>';
   }
-  if(estado === "PAGADO" && state.confirmacionesPendientes.length){
-    html += '<div style="padding:0 18px;">' + bannerConfirmacionesPendientes() + '</div>';
+  if(estado === "PAGADO" || estado === "COTIZADO"){
+    html += bannerConfirmacionesPendientes(estado === "COTIZADO" ? "COTIZACION" : "ELABORACION");
   }
   html += '<div class="panel-body">' + recetasTable(list, true, editFields) + '</div>';
   html += '</div>';
@@ -1211,16 +1213,27 @@ function renderEstadoView(estado){
   bindRecetaRows();
 }
 
-function bannerConfirmacionesPendientes(){
-  var motivo = {SIN_COINCIDENCIA:"no hay una receta en Pagado con ese nombre", VARIAS_COINCIDENCIAS:"hay más de una receta en Pagado con ese nombre"};
-  var html = '<div class="banner">✉ Confirmaciones de elaboración del recetario que no se pudieron marcar solas — márcalas a mano en la receta que corresponda:';
+function bannerConfirmacionesPendientes(tipo){
+  var lista = state.confirmacionesPendientes.filter(function(c){ return (c.tipo||"ELABORACION") === tipo; });
+  if(!lista.length) return "";
+  var esCot = tipo === "COTIZACION";
+  var estadoTxt = esCot ? "Cotizado sin monto ni costo" : "Pagado";
+  var motivo = {
+    SIN_COINCIDENCIA: "no hay una receta en "+estadoTxt+" con ese nombre",
+    VARIAS_COINCIDENCIAS: "hay más de una receta en "+estadoTxt+" con ese nombre",
+    SIN_PRECIOS: "no se pudieron leer los precios del correo"
+  };
+  var html = '<div style="padding:0 18px;"><div class="banner">✉ ' +
+    (esCot ? 'Cotizaciones del recetario que no se pudieron cargar solas — escribe el monto y costo a mano:'
+           : 'Confirmaciones de elaboración del recetario que no se pudieron marcar solas — márcalas a mano en la receta que corresponda:');
   html += '<ul style="margin:6px 0 0 18px;padding:0;">';
-  state.confirmacionesPendientes.forEach(function(c){
+  lista.forEach(function(c){
+    var precios = (esCot && c.monto) ? ' · venta '+fmtMoney(c.monto)+' / costo '+fmtMoney(c.costo) : '';
     html += '<li style="margin:3px 0;"><strong>'+esc(c.paciente_extraido||c.asunto||"(sin asunto)")+'</strong> · '+fmtFechaHora(c.recibido_at)+
-      ' · '+esc(motivo[c.resultado]||c.resultado)+
+      ' · '+esc(motivo[c.resultado]||c.resultado)+precios+
       ' <button class="btn btn-secondary btn-sm" style="margin-left:6px;padding:2px 8px;" onclick="RM.descartarConfirmacion('+Number(c.id)+')">Ya lo revisé</button></li>';
   });
-  html += '</ul></div>';
+  html += '</ul></div></div>';
   return html;
 }
 
@@ -1384,7 +1397,7 @@ function recetasTable(list, showPaciente, editFields){
   html += '</tr></thead><tbody>';
   list.forEach(function(r){
     var rowCompleto = editFields.highlightCompleto && esCotizadoCompleto(r);
-    html += '<tr data-id="'+r.id+'"'+(rowCompleto?' class="row-completo" title="Ya cotizada: monto y costo completos, paciente avisado"':'')+'>';
+    html += '<tr data-id="'+r.id+'"'+(rowCompleto?' class="row-completo" title="C.S.P. escrito: paciente avisado"':'')+'>';
     if(showPaciente){
       if(editFields.pacienteNombre){
         html += '<td><input type="text" class="cell-edit cell-edit-text" data-id="'+r.id+'" data-field="pacienteNombre" ' +
