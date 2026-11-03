@@ -111,10 +111,14 @@ export function textoPropio(cuerpo: string | null | undefined): string {
 }
 
 /* Si el aviso no trae el cuerpo del correo, se confía en la regla de Zoho Mail (que ya filtra
-   por "acuso recibo"); si lo trae, debe contener la frase. */
+   por "acuso recibo"); si lo trae, debe contener la frase. El recetario también escribe
+   "acuso recibo de su requerimiento" en el correo que trae la tabla de precios: si el texto
+   propio trae precios, es una cotización y no una confirmación de elaboración. */
 export function esConfirmacion(cuerpo: string | null | undefined): boolean {
   if (!cuerpo) return true;
   const t = normalizar(textoPropio(cuerpo));
+  if (t.includes("para su elaboracion")) return true;
+  if (/precio\s*(lista|final)/.test(t)) return false;
   return FRASES_CONFIRMACION.some((f) => t.includes(f));
 }
 
