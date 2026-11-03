@@ -163,3 +163,20 @@ test("acuso recibo de una receta que recién se cotiza: no es para revisar", () 
   assert.ok(!soloRecetaSinPagar([receta({ paciente_nombre: "Pedro Soto", estado: "COTIZADO" })], "JOSE MARTINEZ", null));
   assert.ok(!soloRecetaSinPagar([receta({ paciente_nombre: "Jose Martinez", estado: "RETIRADO" })], "JOSE MARTINEZ", null));
 });
+
+// correo real del recetario (José Martínez): dice "acuso recibo de su requerimiento" y trae precios
+const COTIZACION_CON_ACUSO = `<div>Junto con saludar, acuso recibo de su requerimiento<br>VALOR POR 400 GR P.SULFONATO DE CALCIO</div>
+<table><tr><td>Precio Lista c/IVA</td><td>80512</td></tr>
+<tr><td>Descuento convenio</td><td>40%</td></tr>
+<tr><td>Precio Final c/IVA</td><td>48307,2</td></tr>
+<tr><td>Precio Final s/IVA</td><td>40594</td></tr></table>
+<p><u>Importante: El caso se encuentra cerrado. Para cualquier consulta posterior, por favor realizarla a través de un nuevo correo.</u></p>
+<p>Saludos cordiales,</p>`;
+
+test("'acuso recibo de su requerimiento' con tabla de precios es cotización, no elaboración", () => {
+  assert.ok(!esConfirmacion(COTIZACION_CON_ACUSO));
+  assert.deepEqual(leerPrecios(COTIZACION_CON_ACUSO), { monto: 80512, costo: 40594 });
+  // la confirmación real sigue funcionando, también si cita abajo el correo con precios
+  assert.ok(esConfirmacion("Buenos días estimados, acuso recibo para su elaboración."));
+  assert.ok(esConfirmacion("Acuso recibo para su elaboración.<br>-------- Mensaje original --------<br>" + COTIZACION_CON_ACUSO));
+});
