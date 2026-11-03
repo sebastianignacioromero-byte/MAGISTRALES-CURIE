@@ -11,6 +11,7 @@ import {
   esConfirmacion,
   extraerPaciente,
   recetarioDesdeRemitente,
+  soloRecetaSinPagar,
   type RecetaCandidata,
 } from "./index.ts";
 
@@ -149,4 +150,16 @@ test("cotización: no pisa precios ya escritos", () => {
     receta({ estado: "COTIZADO", paciente_nombre: "Carolina Martinez", monto: 15000, costo: 0 }),
   ], "CAROLINA MARTINEZ", "Salcobrand", CRITERIO_COTIZACION);
   assert.equal(r.tipo, "YA_MARCADA");
+});
+
+test("acuso recibo de una receta que recién se cotiza: no es para revisar", () => {
+  assert.ok(soloRecetaSinPagar([receta({ paciente_nombre: "Jose Martinez", estado: "COTIZADO" })], "JOSE MARTINEZ", "Salcobrand"));
+  assert.ok(soloRecetaSinPagar([receta({ paciente_nombre: "Jose Martinez", estado: "POR COTIZAR" })], "JOSE MARTINEZ", null));
+  // si también tiene una en Pagado, o no tiene ninguna, sí se revisa
+  assert.ok(!soloRecetaSinPagar([
+    receta({ paciente_nombre: "Jose Martinez", estado: "COTIZADO" }),
+    receta({ paciente_nombre: "Jose Martinez", estado: "PAGADO", elaboracion_confirmada_at: "2026-11-01T00:00:00Z" }),
+  ], "JOSE MARTINEZ", null));
+  assert.ok(!soloRecetaSinPagar([receta({ paciente_nombre: "Pedro Soto", estado: "COTIZADO" })], "JOSE MARTINEZ", null));
+  assert.ok(!soloRecetaSinPagar([receta({ paciente_nombre: "Jose Martinez", estado: "RETIRADO" })], "JOSE MARTINEZ", null));
 });

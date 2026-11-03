@@ -177,6 +177,22 @@ export function buscarReceta(
   return { tipo: "SIN_COINCIDENCIA" };
 }
 
+/* Estados anteriores a Pagado: un "acuso recibo" para un paciente que solo tiene recetas así
+   (recién enviada a cotizar) no es una confirmación pendiente de revisar. */
+const ESTADOS_ANTES_DE_PAGADO = ["POR COTIZAR", "COTIZADO"];
+
+export function soloRecetaSinPagar(
+  recetas: RecetaCandidata[],
+  paciente: string,
+  recetario: string | null,
+): boolean {
+  const delPaciente = recetas.filter((r) =>
+    (!recetario || r.recetario === recetario) && calzaNombre(paciente, r.paciente_nombre)
+  );
+  return !delPaciente.some((r) => r.estado === "PAGADO") &&
+    delPaciente.some((r) => ESTADOS_ANTES_DE_PAGADO.includes(r.estado));
+}
+
 /* Zoho Mail puede mandar JSON o formulario y los nombres de campo varían; se toma el primero
    que exista. */
 export function campo(payload: Record<string, unknown>, nombres: string[]): string {
@@ -244,12 +260,18 @@ if (typeof Deno !== "undefined") {
     const { data, error } = await sb
       .from("recetas")
       .select("id, paciente_nombre, recetario, estado, elaboracion_confirmada_at")
-      .eq("estado", "PAGADO");
+      .in("estado", ["PAGADO", ...ESTADOS_ANTES_DE_PAGADO]);
     if (error) {
       console.error(error);
       return responder(500, { error: error.message }); // Zoho reintenta
     }
-    const res = buscarReceta((data || []) as RecetaCandidata[], paciente, recetario, CRITERIO_ELABORACION);
+    const recetas = (data || []) as RecetaCandidata[];
+    const res = buscarReceta(recetas, paciente, recetario, CRITERIO_ELABORACION);
+    if (res.tipo === "SIN_COINCIDENCIA" && soloRecetaSinPagar(recetas, paciente, recetario)) {
+      // la receta recién se envió a cotizar: el aviso no es una confirmación de elaboración
+      await registrar({ ...base, resultado: "NO_PAGADA", revisada: true });
+      return responder(200, { resultado: "NO_PAGADA" });
+    }
     if (res.tipo === "MARCADA") {
       const ahora = new Date().toISOString();
       const { error: errUpd } = await sb
