@@ -760,9 +760,46 @@ function sortPacientesArr(arr){
   arr.sort(function(a,b){ return normalize(a.nombre).localeCompare(normalize(b.nombre)); });
   return arr;
 }
+/* Última versión conocida de cada receta en el servidor (id -> fila). Al guardar se envían solo
+   los campos que cambiaron respecto de ella, para no pisar lo que otro escribió mientras tanto:
+   p. ej. el monto y costo que llena la función del correo de cotización cuando esta pestaña
+   llevaba rato abierta sin enterarse (equipo suspendido, conexión en tiempo real caída). */
+var recetasServidor = {};
+function recordarRecetaServidor(row){
+  if(row && row.id) recetasServidor[row.id] = recetaToRow(rowToReceta(row));
+}
+function cambiosReceta(r){
+  var fila = recetaToRow(r);
+  var base = recetasServidor[r.id];
+  if(!base) return null;
+  var cambios = {};
+  Object.keys(fila).forEach(function(k){
+    if(k === "id" || k === "updated_at") return;
+    if(JSON.stringify(fila[k]) !== JSON.stringify(base[k])) cambios[k] = fila[k];
+  });
+  cambios.updated_at = fila.updated_at;
+  return cambios;
+}
 function saveRecetaRow(r){
-  return sb.from("recetas").upsert(recetaToRow(r)).then(function(res){
+  var cambios = cambiosReceta(r);
+  var op = cambios
+    ? sb.from("recetas").update(cambios).eq("id", r.id).select()
+    : sb.from("recetas").upsert(recetaToRow(r)).select();
+  return op.then(function(res){
     if(res.error){ console.error(res.error); toast("No se pudo guardar en el servidor: " + res.error.message, true); return false; }
+    // la fila que devuelve el servidor trae también lo que cambió otro (p. ej. monto y costo)
+    var hayNovedades = false;
+    (res.data||[]).forEach(function(row){
+      recordarRecetaServidor(row);
+      var idx = state.recetas.findIndex(function(x){ return x.id === row.id; });
+      if(idx < 0) return;
+      var local = recetaToRow(state.recetas[idx]), servidor = recetasServidor[row.id];
+      var distinta = Object.keys(servidor).some(function(k){
+        return k !== "updated_at" && JSON.stringify(local[k]) !== JSON.stringify(servidor[k]);
+      });
+      if(distinta){ state.recetas[idx] = rowToReceta(row); hayNovedades = true; }
+    });
+    if(hayNovedades) render();
     return true;
   });
 }
@@ -812,6 +849,8 @@ function loadAllData(){
     if(pacRes.error){ console.error(pacRes.error); toast("No se pudieron cargar los pacientes: " + pacRes.error.message, true); }
     if(recRes.error){ console.error(recRes.error); toast("No se pudieron cargar las recetas: " + recRes.error.message, true); }
     state.pacientes = sortPacientesArr((pacRes.data||[]).map(rowToPaciente));
+    recetasServidor = {};
+    (recRes.data||[]).forEach(recordarRecetaServidor);
     state.recetas = sortRecetasArr((recRes.data||[]).map(rowToReceta));
   }).then(loadConfirmacionesPendientes);
 }
@@ -866,8 +905,10 @@ function fmtFechaHora(iso){
 var realtimeChannel = null;
 function handleRecetaChange(payload){
   if(payload.eventType === "DELETE"){
+    delete recetasServidor[payload.old.id];
     state.recetas = state.recetas.filter(function(r){ return r.id !== payload.old.id; });
   } else {
+    recordarRecetaServidor(payload.new);
     var row = rowToReceta(payload.new);
     var idx = state.recetas.findIndex(function(r){ return r.id === row.id; });
     if(idx>=0) state.recetas[idx] = row; else state.recetas.unshift(row);
@@ -958,6 +999,17 @@ function startApp(){
     render();
     // vuelve a revisar cada 15 min mientras la app queda abierta (por si alguien la deja
     // abierta varios días); si nadie la tiene abierta, se revisa igual al volver a entrar.
+    // al volver a la pestaña (equipo que estuvo suspendido, conexión caída) se recargan los
+    // datos, porque los cambios en tiempo real de mientras no llegan
+    if(!startApp.vigilaVisibilidad){
+      startApp.vigilaVisibilidad = true;
+      document.addEventListener("visibilitychange", function(){
+        if(document.visibilityState !== "visible" || !realtimeChannel) return;
+        var enfocado = document.activeElement;
+        if(enfocado && /^(INPUT|TEXTAREA|SELECT)$/.test(enfocado.tagName)) return;
+        loadAllData().then(render);
+      });
+    }
     if(!vencidosCheckInterval){
       vencidosCheckInterval = setInterval(function(){
         if(checkCotizadosVencidos()) render();
