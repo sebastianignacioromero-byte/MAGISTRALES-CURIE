@@ -180,3 +180,20 @@ test("'acuso recibo de su requerimiento' con tabla de precios es cotización, no
   assert.ok(esConfirmacion("Buenos días estimados, acuso recibo para su elaboración."));
   assert.ok(esConfirmacion("Acuso recibo para su elaboración.<br>-------- Mensaje original --------<br>" + COTIZACION_CON_ACUSO));
 });
+
+test("cotización: también llena la receta que sigue en Por cotizar (mascota martita)", () => {
+  const html = `<div>Buenos días estimados, adjunto cotización solicitada, valor por 70 caps:</div>
+<table><tr><td>Precio Lista c/IVA</td><td>13791</td></tr><tr><td>Descuento convenio</td><td>40%</td></tr>
+<tr><td>Precio Final c/IVA</td><td>8274,6</td></tr><tr><td>Precio Final s/IVA</td><td>6953</td></tr></table>
+<div>La cotización entregada es válida hasta 72 hrs hábiles.</div><div>Saludos cordiales.</div>`;
+  const paciente = extraerPaciente('RE: COTIZACION RECETA "mascota martita" (CONVENIO 180002538) FARMACIA CURIE')!;
+  assert.ok(!esConfirmacion(html));
+  assert.deepEqual(leerPrecios(html), { monto: 13791, costo: 6953 });
+  for (const estado of ["POR COTIZAR", "COTIZADO"]) {
+    const r = buscarReceta([receta({ paciente_nombre: "mascota martita", estado, monto: 0, costo: 0 })], paciente, "Salcobrand", CRITERIO_COTIZACION);
+    assert.equal(r.tipo, "MARCADA", estado);
+  }
+  // en Pagado no se toca
+  const r = buscarReceta([receta({ paciente_nombre: "mascota martita", estado: "PAGADO", monto: 0, costo: 0 })], paciente, "Salcobrand", CRITERIO_COTIZACION);
+  assert.equal(r.tipo, "SIN_COINCIDENCIA");
+});

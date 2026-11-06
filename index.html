@@ -1246,7 +1246,7 @@ function bannerConfirmacionesPendientes(tipo){
   });
   if(!lista.length) return "";
   var esCot = tipo === "COTIZACION";
-  var estadoTxt = esCot ? "Cotizado sin monto ni costo" : "Pagado";
+  var estadoTxt = esCot ? "Por cotizar o Cotizado sin monto ni costo" : "Pagado";
   var motivo = {
     SIN_COINCIDENCIA: "no hay una receta en "+estadoTxt+" con ese nombre",
     VARIAS_COINCIDENCIAS: "hay más de una receta en "+estadoTxt+" con ese nombre",

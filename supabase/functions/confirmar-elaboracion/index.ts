@@ -32,19 +32,21 @@ export type RecetaCandidata = {
 };
 
 export type Criterio = {
-  estado: string;
+  estados: string[];
   pendiente: (r: RecetaCandidata) => boolean;
 };
 
 /* Elaboración: recetas en Pagado aún sin confirmar. */
 export const CRITERIO_ELABORACION: Criterio = {
-  estado: "PAGADO",
+  estados: ["PAGADO"],
   pendiente: (r) => !r.elaboracion_confirmada_at,
 };
 
-/* Cotización: recetas en Cotizado sin monto ni costo (no se pisa lo que ya se escribió). */
+/* Cotización: recetas en Por cotizar o Cotizado sin monto ni costo (no se pisa lo que ya se
+   escribió). Por cotizar también, porque el recetario a veces responde antes de que la receta
+   se pase a Cotizado. */
 export const CRITERIO_COTIZACION: Criterio = {
-  estado: "COTIZADO",
+  estados: ["POR COTIZAR", "COTIZADO"],
   pendiente: (r) => !(Number(r.monto) > 0) && !(Number(r.costo) > 0),
 };
 
@@ -158,7 +160,7 @@ function calzaNombre(nombreAsunto: string, nombreGuardado: string): boolean {
   return buscadas.length > 0 && buscadas.every((p) => guardadas.has(p));
 }
 
-/* Solo recetas en el estado del criterio (Pagado para elaboración, Cotizado para cotización) y,
+/* Solo recetas en el estado del criterio (Pagado para elaboración, Por cotizar o Cotizado para cotización) y,
    si se conoce el recetario por el remitente, solo de ese recetario. Se marca solo si hay
    exactamente una pendiente. */
 export function buscarReceta(
@@ -168,7 +170,7 @@ export function buscarReceta(
   criterio: Criterio = CRITERIO_ELABORACION,
 ): Resultado {
   const candidatas = recetas.filter((r) =>
-    r.estado === criterio.estado &&
+    criterio.estados.includes(r.estado) &&
     (!recetario || r.recetario === recetario) &&
     calzaNombre(paciente, r.paciente_nombre)
   );
@@ -307,7 +309,7 @@ if (typeof Deno !== "undefined") {
     const { data, error } = await sb
       .from("recetas")
       .select("id, paciente_nombre, recetario, estado, monto, costo")
-      .eq("estado", "COTIZADO");
+      .in("estado", CRITERIO_COTIZACION.estados);
     if (error) {
       console.error(error);
       return responder(500, { error: error.message });

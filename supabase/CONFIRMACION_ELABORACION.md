@@ -98,7 +98,7 @@ qué llegó y por qué no calzó.
 ## Cómo encuentra la receta
 
 1. Saca el paciente del asunto: `RE: COTIZACION RECETA "JAVIERA CUETO" (CONVENIO …)` → `JAVIERA CUETO`.
-2. Busca recetas en **Pagado** cuyo nombre contenga esas palabras (sin importar mayúsculas ni tildes).
+2. Busca recetas en **Pagado** (o, para los precios, en **Por cotizar** o **Cotizado**) cuyo nombre contenga esas palabras (sin importar mayúsculas ni tildes).
    Si el remitente es `@sb.cl`, solo entre recetas de **Salcobrand**.
 3. Si hay **exactamente una** sin confirmar, la marca. Si hay 0 o varias, no marca nada y el aviso
    aparece arriba en la vista Pagado para resolverlo a mano ("Ya lo revisé" lo oculta).
