@@ -86,8 +86,9 @@ Igual que el paso 4, pero:
   - **Asunto** contiene `COTIZACION RECETA`
   - **Contenido** contiene `Precio Final`
 
-Si hay más de un producto en el mismo correo (varias tablas), no llena nada y lo deja avisado en
-Cotizado para escribirlo a mano. Nunca pisa un monto o costo que ya escribiste.
+Si hay más de un producto en el mismo correo (varias tablas), el primero llena la receta y por cada
+producto extra crea otra fila "<nombre> 2", "<nombre> 3"... con sus precios. Nunca pisa un monto o
+costo que ya escribiste. Los correos enviados desde farmaciascurie.cl se ignoran.
 
 ### Paso 5 — Probar con un correo real
 

@@ -83,6 +83,17 @@ export function extraerPaciente(asunto: string | null | undefined): string | nul
   return m ? m[1].trim() : null;
 }
 
+/* Correos enviados por la propia farmacia (p. ej. "confirmo elaboración" respondiendo al
+   recetario): citan abajo la tabla de precios y pasan el filtro de Zoho, pero no son del
+   recetario. */
+const DOMINIOS_PROPIOS = ["farmaciascurie.cl"];
+
+export function esCorreoPropio(remitente: string | null | undefined): boolean {
+  const dom = String(remitente || "").toLowerCase().match(/@([a-z0-9.-]+)/);
+  if (!dom) return false;
+  return DOMINIOS_PROPIOS.some((d) => dom[1] === d || dom[1].endsWith("." + d));
+}
+
 export function recetarioDesdeRemitente(remitente: string | null | undefined): string | null {
   const dom = String(remitente || "").toLowerCase().match(/@([a-z0-9.-]+)/);
   if (!dom) return null;
@@ -141,15 +152,36 @@ export type Precios = { monto: number; costo: number };
 /* Tabla del recetario:
      Precio Lista c/IVA   16090   -> monto (venta al paciente)
      Precio Final s/IVA    8113   -> costo
-   Devuelve null si falta alguno, o si hay más de una tabla (varios productos): eso queda para
-   revisarlo a mano. */
+   Devuelve null si falta alguno, o si hay más de una tabla (varios productos: ver
+   leerProductos). */
 export function leerPrecios(cuerpo: string | null | undefined): Precios | null {
+  const productos = leerProductos(cuerpo);
+  return productos && productos.length === 1 ? productos[0] : null;
+}
+
+/* Igual que leerPrecios, pero acepta varias tablas (un producto por tabla, en orden):
+     30 CAPSULAS        Precio Lista c/IVA 9512  ... Precio Final s/IVA 4796
+     Loción capilar     Precio Lista c/IVA 23166 ... Precio Final s/IVA 11680
+   Devuelve null si no hay precios o si no calzan de a pares. */
+export function leerProductos(cuerpo: string | null | undefined): Precios[] | null {
   const texto = textoPropio(cuerpo).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const listas = valoresDe(texto, /precio\s*lista\s*c\s*\/?\s*iva/);
   const finales = valoresDe(texto, /precio\s*final\s*s\s*\/?\s*iva/);
-  if (listas.length !== 1 || finales.length !== 1) return null;
-  if (!(listas[0] > 0) || !(finales[0] > 0)) return null;
-  return { monto: listas[0], costo: finales[0] };
+  if (!listas.length || listas.length !== finales.length) return null;
+  if (listas.some((n) => !(n > 0)) || finales.some((n) => !(n > 0))) return null;
+  return listas.map((monto, i) => ({ monto, costo: finales[i] }));
+}
+
+/* Nombre para la fila de cada producto extra: "Ignacio Baza 2", "Ignacio Baza 3"... saltándose
+   los que ya existen. */
+export function nombresAdicionales(base: string, existentes: string[], cuantos: number): string[] {
+  const usados = new Set(existentes.map(normalizar));
+  const nombres: string[] = [];
+  for (let n = 2; nombres.length < cuantos; n++) {
+    const nombre = base.trim() + " " + n;
+    if (!usados.has(normalizar(nombre))) nombres.push(nombre);
+  }
+  return nombres;
 }
 
 /* Todas las palabras del nombre del asunto deben estar en el nombre guardado
@@ -169,11 +201,15 @@ export function buscarReceta(
   recetario: string | null,
   criterio: Criterio = CRITERIO_ELABORACION,
 ): Resultado {
-  const candidatas = recetas.filter((r) =>
+  const calzan = recetas.filter((r) =>
     criterio.estados.includes(r.estado) &&
     (!recetario || r.recetario === recetario) &&
     calzaNombre(paciente, r.paciente_nombre)
   );
+  // si alguna se llama exactamente igual que en el asunto, solo esas: "IGNACIO BAZA" no debe
+  // tocar "Ignacio Baza 2" (la fila del segundo producto), que tiene su propio nombre
+  const exactas = calzan.filter((r) => normalizar(r.paciente_nombre) === normalizar(paciente));
+  const candidatas = exactas.length ? exactas : calzan;
   const pendientes = candidatas.filter(criterio.pendiente);
   if (pendientes.length === 1) return { tipo: "MARCADA", receta: pendientes[0] };
   if (pendientes.length > 1) return { tipo: "VARIAS_COINCIDENCIAS", ids: pendientes.map((r) => r.id) };
@@ -299,7 +335,8 @@ if (typeof Deno !== "undefined") {
       await registrar({ ...base, resultado: "IGNORADO", revisada: true });
       return responder(200, { resultado: "IGNORADO" });
     }
-    const precios = leerPrecios(cuerpo);
+    const productos = leerProductos(cuerpo);
+    const precios = productos ? productos[0] : null;
     if (!precios) {
       // queda visible en Cotizado: el correo pasó el filtro de Zoho pero no se pudo leer la tabla
       // (varios productos, otro formato, o Zoho no mandó el contenido)
@@ -310,6 +347,8 @@ if (typeof Deno !== "undefined") {
       .from("recetas")
       .select("id, paciente_nombre, recetario, estado, monto, costo")
       .in("estado", CRITERIO_COTIZACION.estados);
+    // para numerar las filas de productos extra se miran todos los nombres, no solo Cotizado
+    const { data: todas } = await sb.from("recetas").select("paciente_nombre");
     if (error) {
       console.error(error);
       return responder(500, { error: error.message });
@@ -317,15 +356,41 @@ if (typeof Deno !== "undefined") {
     const res = buscarReceta((data || []) as RecetaCandidata[], paciente, recetario, CRITERIO_COTIZACION);
     if (res.tipo === "MARCADA") {
       const ahora = new Date().toISOString();
-      const { error: errUpd } = await sb
+      const { data: actualizadas, error: errUpd } = await sb
         .from("recetas")
         .update({ monto: precios.monto, costo: precios.costo, updated_at: ahora })
         .eq("id", res.receta.id)
         .eq("monto", 0)
-        .eq("costo", 0);
+        .eq("costo", 0)
+        .select("*");
       if (errUpd) {
         console.error(errUpd);
         return responder(500, { error: errUpd.message });
+      }
+      // varios productos en el correo: una fila más por cada uno ("<nombre> 2", "<nombre> 3"...),
+      // copiando los datos de la receta. Solo si recién se llenó (un correo repetido no duplica).
+      const original = (actualizadas || [])[0];
+      if (original && productos!.length > 1) {
+        const nombres = nombresAdicionales(
+          original.paciente_nombre,
+          ((todas || []) as { paciente_nombre: string }[]).map((r) => r.paciente_nombre),
+          productos!.length - 1,
+        );
+        const nuevas = productos!.slice(1).map((p, i) => {
+          const fila: Record<string, unknown> = { ...original };
+          delete fila.elaboracion_confirmada_at;
+          return {
+            ...fila,
+            id: "id" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + i,
+            paciente_nombre: nombres[i],
+            monto: p.monto,
+            costo: p.costo,
+            created_at: ahora,
+            updated_at: ahora,
+          };
+        });
+        const { error: errIns } = await sb.from("recetas").insert(nuevas);
+        if (errIns) console.error("No se pudieron crear las filas de los otros productos:", errIns.message);
       }
     }
     return await cerrar({ ...base, monto: precios.monto, costo: precios.costo }, res);
@@ -368,7 +433,7 @@ if (typeof Deno !== "undefined") {
       payload: JSON.parse(JSON.stringify(payload, (_k, v) => typeof v === "string" ? v.slice(0, 4000) : v)),
     };
 
-    if (!paciente) {
+    if (!paciente || esCorreoPropio(remitente)) {
       await registrar({ ...base, resultado: "IGNORADO", revisada: true });
       return responder(200, { resultado: "IGNORADO" });
     }
