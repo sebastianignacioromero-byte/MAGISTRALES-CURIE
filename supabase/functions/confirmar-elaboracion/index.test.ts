@@ -12,6 +12,9 @@ import {
   extraerPaciente,
   recetarioDesdeRemitente,
   soloRecetaSinPagar,
+  leerProductos,
+  nombresAdicionales,
+  esCorreoPropio,
   type RecetaCandidata,
 } from "./index.ts";
 
@@ -196,4 +199,47 @@ test("cotización: también llena la receta que sigue en Por cotizar (mascota ma
   // en Pagado no se toca
   const r = buscarReceta([receta({ paciente_nombre: "mascota martita", estado: "PAGADO", monto: 0, costo: 0 })], paciente, "Salcobrand", CRITERIO_COTIZACION);
   assert.equal(r.tipo, "SIN_COINCIDENCIA");
+});
+
+// correo real de Ignacio Baza: dos productos, una tabla cada uno, y abajo el mensaje citado
+const DOS_PRODUCTOS = `<p>Buenas tardes estimados, adjunto cotización solicitada:<br>\r\n<br>\r\n30 CAPSULAS:</p>
+<table><tbody><tr>\r\n<td>Precio Lista c/IVA</td>\r\n<td>9512</td>\r\n</tr><tr><td>Descuento convenio</td><td>40%</td></tr>
+<tr><td>Precio Final c/IVA</td><td>5707,2</td></tr><tr><td>Precio Final s/IVA</td><td>4796</td></tr></tbody></table>
+<br>\r\nLoción capilar 50 cc:<br>\r\n<br>\r\n<style>div.x td { border: 1px solid rgb(204, 204, 204) }</style>
+<table><tbody><tr><td>Precio Lista c/IVA</td><td>23166</td></tr><tr><td>Descuento convenio</td><td>40%</td></tr>
+<tr><td>Precio Final c/IVA</td><td>13899,6</td></tr><tr><td>Precio Final s/IVA</td><td>11680</td></tr></tbody></table>
+<p>La cotización entregada es válida hasta 72 hrs hábiles.</p><p>Saludos cordiales.</p>
+--------------- Mensaje original ---------------<br>\r\nDe: [sebastian@farmaciascurie.cl]<br>\r\nFavor cotizar<br>`;
+
+test("varios productos: un par de precios por tabla, en orden", () => {
+  assert.deepEqual(leerProductos(DOS_PRODUCTOS), [{ monto: 9512, costo: 4796 }, { monto: 23166, costo: 11680 }]);
+  assert.equal(leerPrecios(DOS_PRODUCTOS), null);
+  assert.ok(!esConfirmacion(DOS_PRODUCTOS));
+  assert.deepEqual(leerProductos(COTIZACION_HTML), [{ monto: 16090, costo: 8113 }]);
+  assert.equal(leerProductos("Precio Lista c/IVA 100 Precio Lista c/IVA 200 Precio Final s/IVA 50"), null);
+});
+
+test("nombres de las filas extra: <nombre> 2, 3... sin repetir los que existen", () => {
+  assert.deepEqual(nombresAdicionales("Ignacio Baza", ["Ignacio Baza"], 1), ["Ignacio Baza 2"]);
+  assert.deepEqual(nombresAdicionales("Ignacio Baza", ["Ignacio Baza", "IGNACIO BAZA 2"], 2), ["Ignacio Baza 3", "Ignacio Baza 4"]);
+});
+
+test("el asunto con el nombre exacto no toca la fila '<nombre> 2'", () => {
+  const recetas = [
+    receta({ id: "a", paciente_nombre: "Ignacio Baza", estado: "COTIZADO", monto: 0, costo: 0 }),
+    receta({ id: "b", paciente_nombre: "Ignacio Baza 2", estado: "COTIZADO", monto: 0, costo: 0 }),
+  ];
+  const r = buscarReceta(recetas, "IGNACIO BAZA", "Salcobrand", CRITERIO_COTIZACION);
+  assert.equal(r.tipo === "MARCADA" && r.receta.id, "a");
+  const r2 = buscarReceta(recetas, "IGNACIO BAZA 2", "Salcobrand", CRITERIO_COTIZACION);
+  assert.equal(r2.tipo === "MARCADA" && r2.receta.id, "b");
+  // sin nombre exacto sigue calzando por palabras
+  const r3 = buscarReceta([receta({ paciente_nombre: "Javiera Cueto Pérez" })], "JAVIERA CUETO", "Salcobrand");
+  assert.equal(r3.tipo, "MARCADA");
+});
+
+test("correos de la propia farmacia se ignoran", () => {
+  assert.ok(esCorreoPropio("sebastian@farmaciascurie.cl"));
+  assert.ok(esCorreoPropio('"Sebastian" <sebastian@farmaciascurie.cl>'));
+  assert.ok(!esCorreoPropio("ventasrecetario@sb.cl"));
 });
